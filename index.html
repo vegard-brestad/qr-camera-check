@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>QR Camera Check</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<style>
+  /* Layout: one column, video on top, controls and readouts stacked below */
+  :root {
+    --bg: #f3f5f4; --surface: #ffffff; --fg: #17211d; --muted: #5b6862;
+    --line: #d5ddd9; --accent: #0b7a64; --ok: #1d7a3a; --bad: #b3261e;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #101614; --surface: #18201d; --fg: #e5ece9; --muted: #9aa8a2;
+      --line: #2c3833; --accent: #3fc2a2; --ok: #5fcf7c; --bad: #ff8a80; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 var(--sans);
+    padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left)); }
+  main { max-width: 640px; margin: 0 auto; display: grid; gap: 14px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  p { margin: 0; }
+  section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+  .stage { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3; max-width: 100%; }
+  video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .reticle { position: absolute; inset: 22%; border: 2px solid rgba(255,255,255,.7); border-radius: 8px; pointer-events: none; }
+  .tapdot { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border: 2px solid #ffd54f; border-radius: 50%; pointer-events: none; }
+  .badge { position: absolute; left: 8px; top: 8px; padding: 4px 8px; border-radius: 6px; font: 600 13px var(--sans); background: rgba(0,0,0,.6); color: #fff; }
+  .badge.hit { background: var(--ok); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, select { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); padding: 9px 12px; min-height: 44px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  select { max-width: 100%; }
+  label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); width: 100%; }
+  input[type=range] { width: 100%; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+  pre { margin: 0; font: 12px/1.4 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+  .hint { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>QR camera check</h1>
+    <p class="hint">Hold an HMS card in front of the camera. Try each setting below and note which one reads the QR code. Then tap <b>Copy report</b> and send the text.</p>
+  </header>
+
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="reticle"></div>
+    <div class="badge" id="badge">Camera off</div>
+  </div>
+
+  <section>
+    <h2>Camera</h2>
+    <div class="row">
+      <button class="primary" id="btnDefault" type="button">Start (same as inspector app)</button>
+      <button id="btnStop" type="button">Stop</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label for="selCamera">Lens
+        <select id="selCamera"><option value="">Start the camera first</option></select>
+      </label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Focus and zoom</h2>
+    <div class="row">
+      <label for="selFocus">Focus mode
+        <select id="selFocus" disabled><option>Not reported by this browser</option></select>
+      </label>
+      <label for="rngZoom">Zoom <span id="zoomVal">–</span>
+        <input type="range" id="rngZoom" disabled>
+      </label>
+      <label for="rngDist">Focus distance (manual) <span id="distVal">–</span>
+        <input type="range" id="rngDist" disabled>
+      </label>
+    </div>
+    <p class="hint" style="margin-top:6px">Tap the video to focus on that spot (only where the browser supports it).</p>
+  </section>
+
+  <section>
+    <h2>Decoding</h2>
+    <dl class="kv">
+      <dt>Decoder</dt><dd id="decoder">–</dd>
+      <dt>Frames</dt><dd id="frames">0</dd>
+      <dt>First read after</dt><dd id="firstHit">–</dd>
+      <dt>Last value</dt><dd id="lastValue">–</dd>
+    </dl>
+  </section>
+
+  <section>
+    <h2>Attempts</h2>
+    <table>
+      <thead><tr><th>Setting</th><th>Result</th></tr></thead>
+      <tbody id="attempts"><tr><td colspan="2" class="hint">No attempts yet</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Report</h2>
+    <div class="row" style="margin-bottom:8px">
+      <button class="primary" id="btnCopy" type="button">Copy report</button>
+      <span class="hint" id="copyStatus"></span>
+    </div>
+    <pre id="report">Start the camera to collect data.</pre>
+  </section>
+</main>
+
+<script>
+(() => {
+  const APP_CONSTRAINTS = { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } };
+  const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+  const $ = (id) => document.getElementById(id);
+  const video = $('video');
+  const state = { stream: null, track: null, detector: null, decoderName: '–', frames: 0, startedAt: 0, firstHitMs: null,
+    lastValue: null, attempts: [], devices: [], appFocusResult: null, currentLabel: '', scanGen: 0 };
+
+  async function initDecoder() {
+    if ('BarcodeDetector' in window) {
+      try {
+        const formats = await window.BarcodeDetector.getSupportedFormats();
+        if (formats.includes('qr_code')) {
+          state.detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+          state.decoderName = 'native BarcodeDetector (what the app uses here)';
+          return;
+        }
+        state.decoderName = 'jsQR (native BarcodeDetector has no qr_code; app would use ZXing wasm)';
+      } catch (error) {
+        state.decoderName = 'jsQR (native BarcodeDetector failed: ' + error + ')';
+      }
+    } else {
+      state.decoderName = 'jsQR (no native BarcodeDetector; app would use ZXing wasm)';
+    }
+    state.detector = null;
+  }
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  async function decodeFrame() {
+    if (video.readyState < 2) return null;
+    if (state.detector) {
+      const codes = await state.detector.detect(video);
+      return codes.length ? codes[0].rawValue : null;
+    }
+    if (typeof jsQR !== 'function') return null;
+    const scale = Math.min(1, 960 / video.videoWidth);
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(image.data, image.width, image.height);
+    return code ? code.data : null;
+  }
+
+  function scanLoop(generation) {
+    const step = async () => {
+      if (generation !== state.scanGen) return;
+      try {
+        const value = await decodeFrame();
+        state.frames++;
+        if (value) onHit(value);
+      } catch (error) {
+        state.decoderName += ' | detect error: ' + error;
+      }
+      render();
+      if ('requestVideoFrameCallback' in video) video.requestVideoFrameCallback(step);
+      else requestAnimationFrame(step);
+    };
+    step();
+  }
+
+  function onHit(value) {
+    const match = value.match(UUID);
+    state.lastValue = match ? match[0] : value.slice(0, 80);
+    if (state.firstHitMs === null) {
+      state.firstHitMs = Math.round(performance.now() - state.startedAt);
+      const last = state.attempts[state.attempts.length - 1];
+      if (last && !last.ok) { last.ok = true; last.ms = state.firstHitMs; }
+    }
+    $('badge').textContent = 'QR read';
+    $('badge').classList.add('hit');
+  }
+
+  function currentSettingName() {
+    const settings = state.track?.getSettings?.() ?? {};
+    const parts = [state.currentLabel || 'default lens'];
+    if (settings.focusMode) parts.push('focus ' + settings.focusMode);
+    if (settings.zoom) parts.push('zoom ' + Number(settings.zoom).toFixed(1) + 'x');
+    if (settings.focusDistance !== undefined && settings.focusMode === 'manual') parts.push('dist ' + settings.focusDistance);
+    if (settings.width) parts.push(settings.width + 'x' + settings.height);
+    return parts.join(', ');
+  }
+
+  function startAttempt() {
+    state.startedAt = performance.now();
+    state.firstHitMs = null;
+    state.frames = 0;
+    $('badge').textContent = 'Looking for QR…';
+    $('badge').classList.remove('hit');
+    state.attempts.push({ setting: currentSettingName(), ok: false, ms: null });
+  }
+
+  async function enableContinuousFocusLikeApp(track) {
+    try {
+      const caps = track.getCapabilities?.();
+      if (!caps?.focusMode?.includes('continuous')) return 'skipped: continuous not in capabilities (' + JSON.stringify(caps?.focusMode ?? null) + ')';
+      await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+      return 'applied';
+    } catch (error) {
+      return 'failed: ' + error;
+    }
+  }
+
+  async function open(constraints, mimicApp) {
+    stop();
+    try {
+      state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      $('badge').textContent = 'Camera error: ' + error.name;
+      $('report').textContent = 'getUserMedia failed: ' + error.name + ' ' + error.message + '\nsecureContext=' + window.isSecureContext;
+      return;
+    }
+    state.track = state.stream.getVideoTracks()[0];
+    state.currentLabel = state.track.label;
+    if (mimicApp) state.appFocusResult = await enableContinuousFocusLikeApp(state.track);
+    video.srcObject = state.stream;
+    await video.play().catch(() => {});
+    await refreshDevices();
+    setupControls();
+    startAttempt();
+    state.scanGen++;
+    scanLoop(state.scanGen);
+    render();
+  }
+
+  function stop() {
+    state.scanGen++;
+    state.stream?.getTracks().forEach((track) => track.stop());
+    state.stream = null;
+    state.track = null;
+    video.srcObject = null;
+    $('badge').textContent = 'Camera off';
+    $('badge').classList.remove('hit');
+  }
+
+  async function refreshDevices() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    state.devices = devices.filter((device) => device.kind === 'videoinput').map((device) => ({ id: device.deviceId, label: device.label }));
+    const select = $('selCamera');
+    select.replaceChildren();
+    const activeId = state.track?.getSettings?.().deviceId;
+    state.devices.forEach((device, index) => {
+      const option = document.createElement('option');
+      option.value = device.id;
+      option.textContent = device.label || ('Camera ' + (index + 1));
+      option.selected = device.id === activeId;
+      select.append(option);
+    });
+  }
+
+  function setupControls() {
+    const caps = state.track?.getCapabilities?.() ?? {};
+    const settings = state.track?.getSettings?.() ?? {};
+
+    const focusSelect = $('selFocus');
+    focusSelect.replaceChildren();
+    if (Array.isArray(caps.focusMode) && caps.focusMode.length) {
+      caps.focusMode.forEach((mode) => {
+        const option = document.createElement('option');
+        option.value = mode; option.textContent = mode; option.selected = mode === settings.focusMode;
+        focusSelect.append(option);
+      });
+      focusSelect.disabled = false;
+    } else {
+      const option = document.createElement('option');
+      option.textContent = 'Not reported by this browser';
+      focusSelect.append(option);
+      focusSelect.disabled = true;
+    }
+
+    setupRange($('rngZoom'), $('zoomVal'), caps.zoom, settings.zoom, (value) => Number(value).toFixed(1) + 'x');
+    setupRange($('rngDist'), $('distVal'), caps.focusDistance, settings.focusDistance, (value) => String(value));
+  }
+
+  function setupRange(input, output, cap, current, format) {
+    if (cap && typeof cap.min === 'number' && cap.max > cap.min) {
+      input.min = cap.min; input.max = cap.max; input.step = cap.step || (cap.max - cap.min) / 50;
+      input.value = current ?? cap.min;
+      input.disabled = false;
+      output.textContent = format(input.value);
+    } else {
+      input.disabled = true;
+      output.textContent = 'not supported';
+    }
+  }
+
+  async function apply(constraint) {
+    if (!state.track) return;
+    try {
+      await state.track.applyConstraints({ advanced: [constraint] });
+    } catch (error) {
+      state.attempts.push({ setting: 'apply ' + JSON.stringify(constraint), ok: false, ms: null, error: String(error) });
+    }
+    startAttempt();
+    render();
+  }
+
+  $('btnDefault').addEventListener('click', () => open(APP_CONSTRAINTS, true));
+  $('btnStop').addEventListener('click', () => { stop(); render(); });
+  $('selCamera').addEventListener('change', (event) => {
+    if (!event.target.value) return;
+    open({ audio: false, video: { deviceId: { exact: event.target.value }, width: { ideal: 1920 }, height: { ideal: 1080 } } }, true);
+  });
+  $('selFocus').addEventListener('change', (event) => apply({ focusMode: event.target.value }));
+  $('rngZoom').addEventListener('input', (event) => { $('zoomVal').textContent = Number(event.target.value).toFixed(1) + 'x'; });
+  $('rngZoom').addEventListener('change', (event) => apply({ zoom: Number(event.target.value) }));
+  $('rngDist').addEventListener('input', (event) => { $('distVal').textContent = event.target.value; });
+  $('rngDist').addEventListener('change', (event) => apply({ focusMode: 'manual', focusDistance: Number(event.target.value) }));
+
+  $('stage').addEventListener('click', async (event) => {
+    if (!state.track) return;
+    const rect = $('stage').getBoundingClientRect();
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    const dot = document.createElement('div');
+    dot.className = 'tapdot'; dot.style.left = (x * 100) + '%'; dot.style.top = (y * 100) + '%';
+    $('stage').append(dot);
+    setTimeout(() => dot.remove(), 900);
+    const caps = state.track.getCapabilities?.() ?? {};
+    const constraint = { pointsOfInterest: [{ x, y }] };
+    if (caps.focusMode?.includes('single-shot')) constraint.focusMode = 'single-shot';
+    await apply(constraint);
+  });
+
+  function buildReport() {
+    const caps = state.track?.getCapabilities?.() ?? null;
+    const settings = state.track?.getSettings?.() ?? null;
+    return {
+      when: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      userAgentData: navigator.userAgentData ? { brands: navigator.userAgentData.brands, mobile: navigator.userAgentData.mobile, platform: navigator.userAgentData.platform } : null,
+      secureContext: window.isSecureContext,
+      decoder: state.decoderName,
+      appContinuousFocus: state.appFocusResult,
+      activeTrackLabel: state.currentLabel,
+      settings,
+      capabilities: caps,
+      cameras: state.devices.map((device) => device.label || '(no label)'),
+      attempts: state.attempts
+    };
+  }
+
+  function render() {
+    $('decoder').textContent = state.decoderName;
+    $('frames').textContent = String(state.frames);
+    $('firstHit').textContent = state.firstHitMs === null ? '–' : (state.firstHitMs / 1000).toFixed(1) + ' s';
+    $('lastValue').textContent = state.lastValue ?? '–';
+    const body = $('attempts');
+    body.replaceChildren();
+    if (!state.attempts.length) {
+      body.innerHTML = '<tr><td colspan="2" class="hint">No attempts yet</td></tr>';
+    }
+    state.attempts.forEach((attempt) => {
+      const row = document.createElement('tr');
+      const setting = document.createElement('td');
+      setting.textContent = attempt.setting + (attempt.error ? ' — ' + attempt.error : '');
+      const result = document.createElement('td');
+      result.className = attempt.ok ? 'ok' : 'bad';
+      result.textContent = attempt.ok ? 'Read in ' + (attempt.ms / 1000).toFixed(1) + ' s' : 'Not read';
+      row.append(setting, result);
+      body.append(row);
+    });
+    if (state.track || state.attempts.length) $('report').textContent = JSON.stringify(buildReport(), null, 2);
+  }
+
+  $('btnCopy').addEventListener('click', async () => {
+    const text = JSON.stringify(buildReport(), null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      $('copyStatus').textContent = 'Copied';
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents($('report'));
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      $('copyStatus').textContent = 'Selected — copy it manually';
+    }
+  });
+
+  initDecoder().then(render);
+})();
+</script>
+</body>
+</html>
